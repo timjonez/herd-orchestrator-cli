@@ -1,0 +1,38 @@
+package herdrx
+
+import (
+	"errors"
+	"fmt"
+)
+
+var (
+	// ErrUnavailable means the Herdr socket could not be reached.
+	ErrUnavailable = errors.New("herdr unavailable")
+	// ErrInvalid is a local argument error.
+	ErrInvalid = errors.New("invalid")
+	// ErrNotFound is a Herdr not_found response.
+	ErrNotFound = errors.New("not found")
+)
+
+// APIError is a Herdr error response.
+type APIError struct {
+	Code    string
+	Message string
+}
+
+func (e *APIError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("herdr: %s", e.Code)
+	}
+	if e.Code == "" {
+		return "herdr: " + e.Message
+	}
+	return fmt.Sprintf("herdr: %s: %s", e.Code, e.Message)
+}
+
+func (e *APIError) Unwrap() error {
+	if e != nil && e.Code == "not_found" {
+		return ErrNotFound
+	}
+	return nil
+}
