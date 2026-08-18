@@ -1,13 +1,23 @@
 ---
 name: herd
-description: Consume the herd pending-decision queue for a Herdr session. Use when the user mentions herd pending, herd watch, or asks what other agents need from them.
+description: Consume the herd pending-decision queue for a Herdr session, or launch a workspace with herd new. Use when the user mentions herd pending, herd watch, herd new, or asks what other agents need from them.
 ---
 
 # herd
 
-`herd` is a session watcher for Herdr. It is a daemon plus a queue, not an orchestration skill.
+`herd` is a session watcher for Herdr, plus one launch recipe. It is not a general orchestration skill.
 
-The existing `herdr` skill still owns layout, `agent start`, and 1:1 `prompt --wait`. This skill only teaches how to read and close the queue `herd` writes.
+The existing `herdr` skill still owns ad-hoc layout, splits, and 1:1 `prompt --wait`. Use `herd new` only when the user wants that launch recipe. This skill also teaches how to read and close the queue `herd` writes.
+
+## Launch a workspace
+
+```bash
+herd new --label fix-login "fix the login redirect"
+herd ls
+herd down fix-login
+```
+
+`herd new` creates a Herdr workspace, starts Claude with `--permission-mode auto`, submits the prompt, and returns. It does not wait. Pass `--manual` to skip auto mode. `down` only closes workspaces `herd new` created.
 
 ## Do not implement the watch loop
 
