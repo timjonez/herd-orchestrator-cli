@@ -18,6 +18,12 @@ type Client interface {
 	ListAgents(ctx context.Context) ([]Agent, error)
 	ReadAgent(ctx context.Context, target, source string, lines int) (Read, error)
 	Notify(ctx context.Context, title, body, sound string) (Notification, error)
+	CreateWorkspace(ctx context.Context, in WorkspaceCreate) (WorkspaceCreated, error)
+	CloseWorkspace(ctx context.Context, workspaceID string) error
+	StartAgent(ctx context.Context, in AgentStart) (Agent, error)
+	GetAgent(ctx context.Context, target string) (Agent, error)
+	WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (Agent, error)
+	PromptAgent(ctx context.Context, target, text string) (Agent, error)
 	Subscribe(ctx context.Context, subs []Subscription, handle func(Event) error) error
 	Socket() string
 }
@@ -195,6 +201,122 @@ func (c *Conn) Notify(ctx context.Context, title, body, sound string) (Notificat
 		return Notification{}, err
 	}
 	return out, nil
+}
+
+func (c *Conn) CreateWorkspace(ctx context.Context, in WorkspaceCreate) (WorkspaceCreated, error) {
+	params := map[string]any{"focus": in.Focus}
+	if in.Cwd != "" {
+		params["cwd"] = in.Cwd
+	}
+	if in.Label != "" {
+		params["label"] = in.Label
+	}
+	raw, err := c.call(ctx, "workspace.create", params)
+	if err != nil {
+		return WorkspaceCreated{}, err
+	}
+	var out WorkspaceCreated
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return WorkspaceCreated{}, err
+	}
+	if out.Workspace.WorkspaceID == "" || out.RootPane.PaneID == "" {
+		return WorkspaceCreated{}, fmt.Errorf("%w: workspace.create returned no ids", ErrInvalid)
+	}
+	return out, nil
+}
+
+func (c *Conn) CloseWorkspace(ctx context.Context, workspaceID string) error {
+	if workspaceID == "" {
+		return fmt.Errorf("%w: empty workspace id", ErrInvalid)
+	}
+	_, err := c.call(ctx, "workspace.close", map[string]any{"workspace_id": workspaceID})
+	return err
+}
+
+func (c *Conn) StartAgent(ctx context.Context, in AgentStart) (Agent, error) {
+	if in.Name == "" || in.Kind == "" || in.PaneID == "" {
+		return Agent{}, fmt.Errorf("%w: agent start requires name, kind, and pane_id", ErrInvalid)
+	}
+	params := map[string]any{
+		"name":    in.Name,
+		"kind":    in.Kind,
+		"pane_id": in.PaneID,
+	}
+	if len(in.Args) > 0 {
+		params["args"] = in.Args
+	}
+	raw, err := c.call(ctx, "agent.start", params)
+	if err != nil {
+		return Agent{}, err
+	}
+	return decodeAgent(raw)
+}
+
+func (c *Conn) GetAgent(ctx context.Context, target string) (Agent, error) {
+	if target == "" {
+		return Agent{}, fmt.Errorf("%w: empty agent target", ErrInvalid)
+	}
+	raw, err := c.call(ctx, "agent.get", map[string]any{"target": target})
+	if err != nil {
+		return Agent{}, err
+	}
+	return decodeAgent(raw)
+}
+
+func (c *Conn) WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (Agent, error) {
+	if target == "" {
+		return Agent{}, fmt.Errorf("%w: empty wait target", ErrInvalid)
+	}
+	params := map[string]any{"target": target}
+	if len(until) > 0 {
+		params["until"] = until
+	}
+	if timeoutMS > 0 {
+		params["timeout_ms"] = timeoutMS
+	}
+	raw, err := c.call(ctx, "agent.wait", params)
+	if err != nil {
+		return Agent{}, err
+	}
+	if ag, err := decodeAgent(raw); err == nil && (ag.PaneID != "" || ag.Name != "") {
+		return ag, nil
+	}
+	return Agent{}, nil
+}
+
+func (c *Conn) PromptAgent(ctx context.Context, target, text string) (Agent, error) {
+	if target == "" {
+		return Agent{}, fmt.Errorf("%w: empty prompt target", ErrInvalid)
+	}
+	if text == "" {
+		return Agent{}, fmt.Errorf("%w: empty prompt text", ErrInvalid)
+	}
+	raw, err := c.call(ctx, "agent.prompt", map[string]any{
+		"target": target,
+		"text":   text,
+	})
+	if err != nil {
+		return Agent{}, err
+	}
+	return decodeAgent(raw)
+}
+
+func decodeAgent(raw json.RawMessage) (Agent, error) {
+	var wrapped struct {
+		Type  string `json:"type"`
+		Agent Agent  `json:"agent"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return Agent{}, err
+	}
+	if wrapped.Agent.PaneID != "" || wrapped.Agent.Name != "" || wrapped.Agent.Agent != "" {
+		return wrapped.Agent, nil
+	}
+	var direct Agent
+	if err := json.Unmarshal(raw, &direct); err != nil {
+		return Agent{}, err
+	}
+	return direct, nil
 }
 
 func (c *Conn) Subscribe(ctx context.Context, subs []Subscription, handle func(Event) error) error {

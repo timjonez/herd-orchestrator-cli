@@ -7,6 +7,7 @@ import (
 
 	"github.com/timjonez/herd-orchestrator-cli/internal/herdrx"
 	"github.com/timjonez/herd-orchestrator-cli/internal/queue"
+	"github.com/timjonez/herd-orchestrator-cli/internal/spaces"
 )
 
 type jsonError struct {
@@ -33,11 +34,11 @@ func (a *App) writeJSONTo(w io.Writer, v any) error {
 
 func errorCode(err error) string {
 	switch {
-	case errors.Is(err, queue.ErrNotFound), errors.Is(err, herdrx.ErrNotFound):
+	case errors.Is(err, queue.ErrNotFound), errors.Is(err, herdrx.ErrNotFound), errors.Is(err, spaces.ErrNotFound):
 		return "not_found"
-	case errors.Is(err, queue.ErrConflict):
+	case errors.Is(err, queue.ErrConflict), errors.Is(err, spaces.ErrConflict):
 		return "conflict"
-	case errors.Is(err, queue.ErrInvalid), errors.Is(err, herdrx.ErrInvalid):
+	case errors.Is(err, queue.ErrInvalid), errors.Is(err, herdrx.ErrInvalid), errors.Is(err, spaces.ErrInvalid):
 		return "invalid"
 	case errors.Is(err, herdrx.ErrUnavailable):
 		return "unavailable"

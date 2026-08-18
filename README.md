@@ -1,6 +1,6 @@
 # herd
 
-Thin session watcher for [Herdr](https://herdr.dev). It watches every live agent except itself, classifies attention events without an LLM, keeps a durable pending queue, and pages you when a human decision is needed.
+Thin session watcher for [Herdr](https://herdr.dev). It watches every live agent except itself, classifies attention events without an LLM, keeps a durable pending queue, and pages you when a human decision is needed. `herd new` is the one launch recipe: create a workspace, start Claude, submit a prompt, and return.
 
 This is not a replacement for `herdr`, and it is not an agent babysitter. Waiting is not reasoning.
 
@@ -25,8 +25,14 @@ herd show <id>
 herd ack <id>
 herd dismiss <id>
 herd notify --title TEXT [--body TEXT] [--sound request|done|none]
+herd new [prompt...] [--label TEXT] [--cwd PATH] [--name AGENT]
+         [--kind claude] [--manual] [--focus]
+herd ls
+herd down <workspace|name> [--force]
 herd version
 ```
+
+`new` creates a Herdr workspace, starts an agent in the root pane, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`; `--manual` skips that. `ls` and `down` only see workspaces `herd new` created. `down` refuses if that workspace still has open queue items unless `--force` is set.
 
 `watch` is a blocking daemon. Status goes to stderr. `--json` writes one JSONL object per new or updated queue item on stdout.
 
@@ -48,7 +54,8 @@ When `HERDR_PANE_ID` is set, that pane is ignored (the watcher does not queue it
 
 ```
 $XDG_DATA_HOME/herd/<session>/queue.json
-# or ~/.local/share/herd/<session>/queue.json
+$XDG_DATA_HOME/herd/<session>/spaces.json
+# or ~/.local/share/herd/<session>/
 ```
 
 Override with `--state-dir` or `HERD_STATE_DIR`. Session defaults to `HERDR_SESSION` or `default`.
@@ -65,13 +72,18 @@ Herdr `blocked` is a hint, not truth. Grok and Claude Code are screen-manifest a
 | `settled` | `done`, or idle after work with no question markers | no |
 | `unknown_idle` | `unknown` or unreadable | no |
 
-`herd` never sends input to an agent.
+`watch` never sends input to an agent. `new` submits one prompt and returns.
 
 ## Typical use
 
 ```bash
 # in a spare pane or a user systemd unit
 herd watch --json
+
+# launch a working Claude and leave
+herd new --label fix-login "fix the login redirect"
+herd ls
+herd down fix-login
 
 # from another pane, or from an agent skill
 herd pending --json

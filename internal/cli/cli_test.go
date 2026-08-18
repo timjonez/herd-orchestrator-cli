@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,12 +12,28 @@ import (
 
 	"github.com/timjonez/herd-orchestrator-cli/internal/herdrx"
 	"github.com/timjonez/herd-orchestrator-cli/internal/queue"
+	"github.com/timjonez/herd-orchestrator-cli/internal/spaces"
 )
 
 type fakeClient struct {
-	agents  []herdrx.Agent
-	pong    herdrx.Pong
-	notices []string
+	agents     []herdrx.Agent
+	pong       herdrx.Pong
+	notices    []string
+	creates    []herdrx.WorkspaceCreate
+	starts     []herdrx.AgentStart
+	prompts    []promptCall
+	closes     []string
+	createErr  error
+	startErr   error
+	promptErr  error
+	closeErr   error
+	waitStatus string
+	waitErr    error
+}
+
+type promptCall struct {
+	Target string
+	Text   string
 }
 
 func (f *fakeClient) Socket() string { return "/tmp/fake.sock" }
@@ -32,6 +49,56 @@ func (f *fakeClient) ReadAgent(ctx context.Context, target, source string, lines
 func (f *fakeClient) Notify(ctx context.Context, title, body, sound string) (herdrx.Notification, error) {
 	f.notices = append(f.notices, title)
 	return herdrx.Notification{Shown: true, Reason: "shown"}, nil
+}
+func (f *fakeClient) CreateWorkspace(ctx context.Context, in herdrx.WorkspaceCreate) (herdrx.WorkspaceCreated, error) {
+	f.creates = append(f.creates, in)
+	if f.createErr != nil {
+		return herdrx.WorkspaceCreated{}, f.createErr
+	}
+	id := fmt.Sprintf("w%d", len(f.creates)+2)
+	return herdrx.WorkspaceCreated{
+		Workspace: herdrx.Workspace{WorkspaceID: id, Label: in.Label},
+		Tab:       herdrx.Tab{TabID: id + ":t1", WorkspaceID: id},
+		RootPane:  herdrx.Pane{PaneID: id + ":p1", WorkspaceID: id, TabID: id + ":t1"},
+	}, nil
+}
+func (f *fakeClient) CloseWorkspace(ctx context.Context, workspaceID string) error {
+	f.closes = append(f.closes, workspaceID)
+	return f.closeErr
+}
+func (f *fakeClient) StartAgent(ctx context.Context, in herdrx.AgentStart) (herdrx.Agent, error) {
+	f.starts = append(f.starts, in)
+	if f.startErr != nil {
+		return herdrx.Agent{}, f.startErr
+	}
+	return herdrx.Agent{
+		Agent: in.Kind, Name: in.Name, Status: "idle",
+		PaneID: in.PaneID, WorkspaceID: strings.Split(in.PaneID, ":")[0],
+	}, nil
+}
+func (f *fakeClient) GetAgent(ctx context.Context, target string) (herdrx.Agent, error) {
+	status := f.waitStatus
+	if status == "" {
+		status = "idle"
+	}
+	return herdrx.Agent{Name: target, Status: status, InteractiveReady: status == "idle" || status == "done"}, nil
+}
+func (f *fakeClient) WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (herdrx.Agent, error) {
+	if f.waitErr != nil {
+		return herdrx.Agent{}, f.waitErr
+	}
+	status := f.waitStatus
+	if status == "" {
+		status = "idle"
+	}
+	return herdrx.Agent{Name: target, Status: status, InteractiveReady: status == "idle" || status == "done"}, nil
+}
+func (f *fakeClient) PromptAgent(ctx context.Context, target, text string) (herdrx.Agent, error) {
+	f.prompts = append(f.prompts, promptCall{Target: target, Text: text})
+	if f.promptErr != nil {
+		return herdrx.Agent{}, f.promptErr
+	}
+	return herdrx.Agent{Name: target, Status: "working"}, nil
 }
 func (f *fakeClient) Subscribe(ctx context.Context, subs []herdrx.Subscription, handle func(herdrx.Event) error) error {
 	<-ctx.Done()
@@ -170,5 +237,273 @@ func TestQueuePathUsesSession(t *testing.T) {
 	got := queue.DirFor(dir, "work")
 	if filepath.Base(filepath.Dir(got)) != "work" {
 		t.Fatalf("path: %s", got)
+	}
+}
+
+func TestNewStartsClaudeAutoAndPrompts(t *testing.T) {
+	fc := &fakeClient{pong: herdrx.Pong{Version: "0.8.0", Protocol: 19}}
+	app, dir, out, errb := newTestApp(t, fc)
+	cwd := t.TempDir()
+
+	if code := app.run(dir, "--json", "new", "--cwd", cwd, "--label", "fix-login", "fix the login redirect"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+	if len(fc.creates) != 1 || fc.creates[0].Cwd != cwd || fc.creates[0].Label != "fix-login" || fc.creates[0].Focus {
+		t.Fatalf("create: %+v", fc.creates)
+	}
+	if len(fc.starts) != 1 {
+		t.Fatalf("starts: %+v", fc.starts)
+	}
+	st := fc.starts[0]
+	if st.Name != "fix-login" || st.Kind != "claude" || st.PaneID != "w3:p1" {
+		t.Fatalf("start: %+v", st)
+	}
+	if len(st.Args) != 2 || st.Args[0] != "--permission-mode" || st.Args[1] != "auto" {
+		t.Fatalf("auto args: %v", st.Args)
+	}
+	if len(fc.prompts) != 1 || fc.prompts[0].Target != "w3:p1" || fc.prompts[0].Text != "fix the login redirect" {
+		t.Fatalf("prompt: %+v", fc.prompts)
+	}
+	if len(fc.closes) != 0 {
+		t.Fatalf("unexpected close: %v", fc.closes)
+	}
+
+	var sp spaces.Space
+	if err := json.Unmarshal(out.Bytes(), &sp); err != nil {
+		t.Fatal(err)
+	}
+	if sp.WorkspaceID != "w3" || sp.PaneID != "w3:p1" || !sp.Auto || sp.Prompt != "fix the login redirect" {
+		t.Fatalf("space: %+v", sp)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := app.run(dir, "--json", "ls"); code != 0 {
+		t.Fatalf("ls: %s", errb.String())
+	}
+	var list []spaces.Space
+	if err := json.Unmarshal(out.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].WorkspaceID != "w3" {
+		t.Fatalf("ls: %s", out.String())
+	}
+}
+
+func TestNewManualAndNoPrompt(t *testing.T) {
+	fc := &fakeClient{pong: herdrx.Pong{Version: "0.8.0", Protocol: 19}}
+	app, dir, _, errb := newTestApp(t, fc)
+	cwd := t.TempDir()
+
+	if code := app.run(dir, "new", "--cwd", cwd, "--label", "review", "--manual", "--focus"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+	if len(fc.creates) != 1 || !fc.creates[0].Focus {
+		t.Fatalf("create: %+v", fc.creates)
+	}
+	if len(fc.starts) != 1 || len(fc.starts[0].Args) != 0 {
+		t.Fatalf("start args: %+v", fc.starts)
+	}
+	if len(fc.prompts) != 0 {
+		t.Fatalf("prompt: %+v", fc.prompts)
+	}
+}
+
+func TestNewNonClaudeSkipsAutoArgs(t *testing.T) {
+	fc := &fakeClient{pong: herdrx.Pong{Version: "0.8.0", Protocol: 19}}
+	app, dir, _, errb := newTestApp(t, fc)
+	cwd := t.TempDir()
+
+	if code := app.run(dir, "new", "--cwd", cwd, "--kind", "grok", "--name", "reviewer"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+	if len(fc.starts) != 1 || fc.starts[0].Kind != "grok" || len(fc.starts[0].Args) != 0 || fc.starts[0].Name != "reviewer" {
+		t.Fatalf("start: %+v", fc.starts)
+	}
+}
+
+func TestNewRejectsInvalidName(t *testing.T) {
+	app, dir, _, errb := newTestApp(t, nil)
+	if code := app.run(dir, "--json", "new", "--cwd", t.TempDir(), "--name", "1bad"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "invalid") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+}
+
+func TestNewRejectsTakenName(t *testing.T) {
+	fc := &fakeClient{
+		pong:   herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		agents: []herdrx.Agent{{Name: "reviewer"}},
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "--json", "new", "--cwd", t.TempDir(), "--name", "reviewer"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "conflict") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+	if len(fc.creates) != 0 {
+		t.Fatalf("created after name conflict: %+v", fc.creates)
+	}
+}
+
+func TestNewSuffixesGeneratedName(t *testing.T) {
+	fc := &fakeClient{
+		pong:   herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		agents: []herdrx.Agent{{Name: "fix-login"}},
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "fix-login", "--manual"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+	if len(fc.starts) != 1 || fc.starts[0].Name != "fix-login-2" {
+		t.Fatalf("start: %+v", fc.starts)
+	}
+}
+
+func TestNewSkipsPromptWhenBlocked(t *testing.T) {
+	fc := &fakeClient{
+		pong:       herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		waitStatus: "blocked",
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "fix-login", "do the thing"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if len(fc.prompts) != 0 {
+		t.Fatalf("prompted while blocked: %+v", fc.prompts)
+	}
+	st, err := spaces.Open(spaces.DirFor(dir, "default"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Get("w3"); err != nil {
+		t.Fatalf("should still record: %v", err)
+	}
+}
+
+func TestNewPromptFailureStillRecords(t *testing.T) {
+	fc := &fakeClient{
+		pong:      herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		promptErr: fmt.Errorf("stalled"),
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "fix-login", "do the thing"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	st, err := spaces.Open(spaces.DirFor(dir, "default"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Get("w3")
+	if err != nil || got.Name != "fix-login" {
+		t.Fatalf("recorded: %v %+v", err, got)
+	}
+}
+
+func TestNewClosesWorkspaceWhenStartFails(t *testing.T) {
+	fc := &fakeClient{
+		pong:     herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		startErr: fmt.Errorf("boom"),
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "x"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if len(fc.creates) != 1 || len(fc.closes) != 1 || fc.closes[0] != "w3" {
+		t.Fatalf("creates=%v closes=%v", fc.creates, fc.closes)
+	}
+	st, err := spaces.Open(spaces.DirFor(dir, "default"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, err := st.List()
+	if err != nil || len(list) != 0 {
+		t.Fatalf("recorded: %v %+v", err, list)
+	}
+}
+
+func TestDownClosesRecordedWorkspace(t *testing.T) {
+	fc := &fakeClient{pong: herdrx.Pong{Version: "0.8.0", Protocol: 19}}
+	app, dir, out, errb := newTestApp(t, fc)
+	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "fix-login", "--manual"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := app.run(dir, "down", "fix-login"); code != 0 {
+		t.Fatalf("down: %s", errb.String())
+	}
+	if len(fc.closes) != 1 || fc.closes[0] != "w3" {
+		t.Fatalf("closes: %v out=%s", fc.closes, out.String())
+	}
+	if !strings.Contains(out.String(), "closed w3") {
+		t.Fatalf("out: %s", out.String())
+	}
+
+	out.Reset()
+	if code := app.run(dir, "ls"); code != 0 {
+		t.Fatalf("ls: %s", errb.String())
+	}
+	if !strings.Contains(out.String(), "(no workspaces)") {
+		t.Fatalf("ls after down: %s", out.String())
+	}
+}
+
+func TestDownUnknown(t *testing.T) {
+	app, dir, _, errb := newTestApp(t, nil)
+	if code := app.run(dir, "--json", "down", "w9"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "not_found") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+}
+
+func TestDownRefusesOpenQueueUnlessForced(t *testing.T) {
+	fc := &fakeClient{pong: herdrx.Pong{Version: "0.8.0", Protocol: 19}}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "fix-login", "--manual"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+
+	st, err := queue.Open(queue.DirFor(dir, "default"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.Upsert(queue.Draft{
+		PaneID:         "w3:p1",
+		WorkspaceID:    "w3",
+		Name:           "fix-login",
+		Kind:           queue.KindNeedsDecision,
+		StateChangeSeq: 1,
+	}, app.now()); err != nil {
+		t.Fatal(err)
+	}
+
+	errb.Reset()
+	if code := app.run(dir, "--json", "down", "w3"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "conflict") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+	if len(fc.closes) != 0 {
+		t.Fatalf("closed without force: %v", fc.closes)
+	}
+
+	errb.Reset()
+	if code := app.run(dir, "down", "--force", "w3"); code != 0 {
+		t.Fatalf("force: %s", errb.String())
+	}
+	if len(fc.closes) != 1 {
+		t.Fatalf("closes: %v", fc.closes)
+	}
+	open, err := st.List(false)
+	if err != nil || len(open) != 0 {
+		t.Fatalf("queue after force: %v %+v", err, open)
 	}
 }

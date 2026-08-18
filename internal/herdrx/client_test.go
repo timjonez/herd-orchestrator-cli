@@ -190,6 +190,140 @@ func TestCallAndSubscribe(t *testing.T) {
 	}
 }
 
+func TestCreateStartPromptClose(t *testing.T) {
+	var methods []string
+	var lastParams map[string]any
+	sock := startServer(t, func(req map[string]any, w *bufio.Writer) {
+		method, _ := req["method"].(string)
+		id, _ := req["id"].(string)
+		methods = append(methods, method)
+		if p, ok := req["params"].(map[string]any); ok {
+			lastParams = p
+		}
+		switch method {
+		case "workspace.create":
+			writeLine(t, w, map[string]any{
+				"id": id,
+				"result": map[string]any{
+					"type": "workspace_created",
+					"workspace": map[string]any{
+						"workspace_id": "w3",
+						"label":        "fix-login",
+						"number":       3,
+					},
+					"tab": map[string]any{
+						"tab_id":       "w3:t1",
+						"workspace_id": "w3",
+						"label":        "main",
+					},
+					"root_pane": map[string]any{
+						"pane_id":      "w3:p1",
+						"workspace_id": "w3",
+						"tab_id":       "w3:t1",
+					},
+				},
+			})
+		case "agent.start":
+			writeLine(t, w, map[string]any{
+				"id": id,
+				"result": map[string]any{
+					"type": "agent_started",
+					"argv": []string{"claude", "--permission-mode", "auto"},
+					"agent": map[string]any{
+						"agent":        "claude",
+						"name":         "fix-login",
+						"agent_status": "idle",
+						"pane_id":      "w3:p1",
+						"tab_id":       "w3:t1",
+						"workspace_id": "w3",
+					},
+				},
+			})
+		case "agent.prompt":
+			writeLine(t, w, map[string]any{
+				"id": id,
+				"result": map[string]any{
+					"type": "agent_prompted",
+					"agent": map[string]any{
+						"agent":        "claude",
+						"name":         "fix-login",
+						"agent_status": "working",
+						"pane_id":      "w3:p1",
+					},
+				},
+			})
+		case "workspace.close":
+			writeLine(t, w, map[string]any{
+				"id":     id,
+				"result": map[string]any{"type": "ok"},
+			})
+		default:
+			writeLine(t, w, map[string]any{
+				"id":    id,
+				"error": map[string]any{"code": "unknown", "message": method},
+			})
+		}
+	})
+
+	c, err := Dial(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	created, err := c.CreateWorkspace(ctx, WorkspaceCreate{
+		Cwd: "/tmp/proj", Label: "fix-login", Focus: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Workspace.WorkspaceID != "w3" || created.RootPane.PaneID != "w3:p1" {
+		t.Fatalf("created: %+v", created)
+	}
+
+	started, err := c.StartAgent(ctx, AgentStart{
+		Name: "fix-login", Kind: "claude", PaneID: "w3:p1",
+		Args: []string{"--permission-mode", "auto"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started.Name != "fix-login" || started.Agent != "claude" {
+		t.Fatalf("started: %+v", started)
+	}
+
+	prompted, err := c.PromptAgent(ctx, "fix-login", "fix the login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompted.Status != "working" {
+		t.Fatalf("prompted: %+v", prompted)
+	}
+	if lastParams["target"] != "fix-login" || lastParams["text"] != "fix the login" {
+		t.Fatalf("prompt params: %+v", lastParams)
+	}
+	if _, ok := lastParams["wait"]; ok {
+		t.Fatalf("prompt should not wait: %+v", lastParams)
+	}
+
+	if err := c.CloseWorkspace(ctx, "w3"); err != nil {
+		t.Fatal(err)
+	}
+	if lastParams["workspace_id"] != "w3" {
+		t.Fatalf("close params: %+v", lastParams)
+	}
+	want := []string{"workspace.create", "agent.start", "agent.prompt", "workspace.close"}
+	if len(methods) != len(want) {
+		t.Fatalf("methods: %v", methods)
+	}
+	for i, m := range want {
+		if methods[i] != m {
+			t.Fatalf("methods: %v", methods)
+		}
+	}
+}
+
 func startServer(t *testing.T, handle func(req map[string]any, w *bufio.Writer)) string {
 	t.Helper()
 	sock := filepath.Join(t.TempDir(), "herdr.sock")

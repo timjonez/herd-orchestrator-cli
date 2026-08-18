@@ -42,6 +42,24 @@ func (f *fakeClient) Notify(ctx context.Context, title, body, sound string) (her
 	f.notices = append(f.notices, title)
 	return herdrx.Notification{Shown: true, Reason: "shown"}, nil
 }
+func (f *fakeClient) CreateWorkspace(ctx context.Context, in herdrx.WorkspaceCreate) (herdrx.WorkspaceCreated, error) {
+	return herdrx.WorkspaceCreated{}, nil
+}
+func (f *fakeClient) CloseWorkspace(ctx context.Context, workspaceID string) error {
+	return nil
+}
+func (f *fakeClient) StartAgent(ctx context.Context, in herdrx.AgentStart) (herdrx.Agent, error) {
+	return herdrx.Agent{}, nil
+}
+func (f *fakeClient) GetAgent(ctx context.Context, target string) (herdrx.Agent, error) {
+	return herdrx.Agent{}, nil
+}
+func (f *fakeClient) WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (herdrx.Agent, error) {
+	return herdrx.Agent{}, nil
+}
+func (f *fakeClient) PromptAgent(ctx context.Context, target, text string) (herdrx.Agent, error) {
+	return herdrx.Agent{}, nil
+}
 func (f *fakeClient) Subscribe(ctx context.Context, subs []herdrx.Subscription, handle func(herdrx.Event) error) error {
 	f.mu.Lock()
 	f.subs = append([]herdrx.Subscription(nil), subs...)
