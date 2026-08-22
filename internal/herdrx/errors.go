@@ -42,3 +42,9 @@ func IsAgentNotReady(err error) bool {
 	var api *APIError
 	return errors.As(err, &api) && api.Code == "agent_not_ready"
 }
+
+// IsPaneBusy reports Herdr agent_pane_busy (new pane not yet an available shell).
+func IsPaneBusy(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Code == "agent_pane_busy"
+}
