@@ -36,3 +36,9 @@ func (e *APIError) Unwrap() error {
 	}
 	return nil
 }
+
+// IsAgentNotReady reports Herdr agent_not_ready (unnamed or not yet promptable).
+func IsAgentNotReady(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Code == "agent_not_ready"
+}

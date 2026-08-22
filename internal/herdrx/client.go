@@ -22,6 +22,7 @@ type Client interface {
 	CloseWorkspace(ctx context.Context, workspaceID string) error
 	StartAgent(ctx context.Context, in AgentStart) (Agent, error)
 	GetAgent(ctx context.Context, target string) (Agent, error)
+	RenameAgent(ctx context.Context, target, name string) (Agent, error)
 	WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (Agent, error)
 	PromptAgent(ctx context.Context, target, text string) (Agent, error)
 	Subscribe(ctx context.Context, subs []Subscription, handle func(Event) error) error
@@ -257,6 +258,23 @@ func (c *Conn) GetAgent(ctx context.Context, target string) (Agent, error) {
 		return Agent{}, fmt.Errorf("%w: empty agent target", ErrInvalid)
 	}
 	raw, err := c.call(ctx, "agent.get", map[string]any{"target": target})
+	if err != nil {
+		return Agent{}, err
+	}
+	return decodeAgent(raw)
+}
+
+func (c *Conn) RenameAgent(ctx context.Context, target, name string) (Agent, error) {
+	if target == "" {
+		return Agent{}, fmt.Errorf("%w: empty rename target", ErrInvalid)
+	}
+	if name == "" {
+		return Agent{}, fmt.Errorf("%w: empty agent name", ErrInvalid)
+	}
+	raw, err := c.call(ctx, "agent.rename", map[string]any{
+		"target": target,
+		"name":   name,
+	})
 	if err != nil {
 		return Agent{}, err
 	}
