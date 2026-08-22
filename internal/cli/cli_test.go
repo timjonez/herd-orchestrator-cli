@@ -25,6 +25,7 @@ type fakeClient struct {
 	closes     []string
 	createErr  error
 	startErr   error
+	startBusy  int
 	promptErr  error
 	closeErr   error
 	waitStatus string
@@ -77,6 +78,10 @@ func (f *fakeClient) CloseWorkspace(ctx context.Context, workspaceID string) err
 }
 func (f *fakeClient) StartAgent(ctx context.Context, in herdrx.AgentStart) (herdrx.Agent, error) {
 	f.starts = append(f.starts, in)
+	if f.startBusy > 0 {
+		f.startBusy--
+		return herdrx.Agent{}, &herdrx.APIError{Code: "agent_pane_busy", Message: "pane is not an available shell"}
+	}
 	if f.startErr != nil {
 		return herdrx.Agent{}, f.startErr
 	}
@@ -443,6 +448,23 @@ func TestNewPromptFailureStillRecords(t *testing.T) {
 	got, err := st.Get("w3")
 	if err != nil || got.Name != "fix-login" {
 		t.Fatalf("recorded: %v %+v", err, got)
+	}
+}
+
+func TestNewRetriesPaneBusyThenStarts(t *testing.T) {
+	fc := &fakeClient{
+		pong:      herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		startBusy: 2,
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "--json", "new", "--cwd", t.TempDir(), "--kind", "grok", "--label", "shell-wait", "do the thing"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+	if len(fc.starts) != 3 {
+		t.Fatalf("starts=%d want 3", len(fc.starts))
+	}
+	if len(fc.closes) != 0 {
+		t.Fatalf("closed after busy retry: %v", fc.closes)
 	}
 }
 

@@ -129,7 +129,7 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 	}
 
 	autoArgs := permissionArgs(kind, opt.manual)
-	started, err := c.StartAgent(ctx, herdrx.AgentStart{
+	started, err := startAgentWhenShellReady(ctx, c, herdrx.AgentStart{
 		Name:   name,
 		Kind:   kind,
 		PaneID: created.RootPane.PaneID,
@@ -219,6 +219,27 @@ func liveAgentNames(ctx context.Context, c herdrx.Client) []string {
 }
 
 const promptReadyTimeoutMS = 45000
+const startRetryInterval = 200 * time.Millisecond
+
+// startAgentWhenShellReady retries agent.start while the new workspace
+// root pane is not yet an available shell (agent_pane_busy).
+func startAgentWhenShellReady(ctx context.Context, c herdrx.Client, in herdrx.AgentStart) (herdrx.Agent, error) {
+	deadline := time.Now().Add(time.Duration(promptReadyTimeoutMS) * time.Millisecond)
+	for {
+		ag, err := c.StartAgent(ctx, in)
+		if err == nil {
+			return ag, nil
+		}
+		if !herdrx.IsPaneBusy(err) || time.Now().After(deadline) {
+			return herdrx.Agent{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return herdrx.Agent{}, ctx.Err()
+		case <-time.After(startRetryInterval):
+		}
+	}
+}
 
 // ensureNamed makes sure Herdr will accept agent.prompt for name.
 // agent.start can return before the pane occupant is a named agent
