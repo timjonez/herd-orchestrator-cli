@@ -166,14 +166,17 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 	}
 
 	if opt.prompt != "" {
-		ready, err := waitUntilPromptable(ctx, c, sp.PaneID)
+		if err := ensureNamed(ctx, c, sp.PaneID, name); err != nil {
+			return fmt.Errorf("name agent %s in %s: %w", name, sp.WorkspaceID, err)
+		}
+		ready, err := waitUntilPromptable(ctx, c, name)
 		if err != nil {
 			return fmt.Errorf("wait for agent %s in %s: %w", name, sp.WorkspaceID, err)
 		}
 		if ready.Status == "blocked" {
 			return fmt.Errorf("prompt agent %s in %s: agent is blocked", name, sp.WorkspaceID)
 		}
-		if _, err := c.PromptAgent(ctx, sp.PaneID, opt.prompt); err != nil {
+		if _, err := c.PromptAgent(ctx, name, opt.prompt); err != nil {
 			return fmt.Errorf("prompt agent %s in %s: %w", name, sp.WorkspaceID, err)
 		}
 	}
@@ -215,6 +218,21 @@ func liveAgentNames(ctx context.Context, c herdrx.Client) []string {
 }
 
 const promptReadyTimeoutMS = 45000
+
+// ensureNamed makes sure Herdr will accept agent.prompt for name.
+// agent.start can return before the pane occupant is a named agent
+// (seen with grok: pane is idle, name never attached). Prompting the
+// pane id then fails with agent_not_ready.
+func ensureNamed(ctx context.Context, c herdrx.Client, paneID, name string) error {
+	if _, err := c.GetAgent(ctx, name); err == nil {
+		return nil
+	}
+	if _, err := c.RenameAgent(ctx, paneID, name); err != nil {
+		return err
+	}
+	_, err := c.GetAgent(ctx, name)
+	return err
+}
 
 func waitUntilPromptable(ctx context.Context, c herdrx.Client, target string) (herdrx.Agent, error) {
 	ag, err := c.WaitAgent(ctx, target, []string{"idle", "done", "blocked"}, promptReadyTimeoutMS)

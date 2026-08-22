@@ -54,6 +54,9 @@ func (f *fakeClient) StartAgent(ctx context.Context, in herdrx.AgentStart) (herd
 func (f *fakeClient) GetAgent(ctx context.Context, target string) (herdrx.Agent, error) {
 	return herdrx.Agent{}, nil
 }
+func (f *fakeClient) RenameAgent(ctx context.Context, target, name string) (herdrx.Agent, error) {
+	return herdrx.Agent{}, nil
+}
 func (f *fakeClient) WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (herdrx.Agent, error) {
 	return herdrx.Agent{}, nil
 }

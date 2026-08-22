@@ -29,6 +29,15 @@ type fakeClient struct {
 	closeErr   error
 	waitStatus string
 	waitErr    error
+	getErr     error
+	renameErr  error
+	renames    []renameCall
+	unnamed    bool
+}
+
+type renameCall struct {
+	Target string
+	Name   string
 }
 
 type promptCall struct {
@@ -77,11 +86,24 @@ func (f *fakeClient) StartAgent(ctx context.Context, in herdrx.AgentStart) (herd
 	}, nil
 }
 func (f *fakeClient) GetAgent(ctx context.Context, target string) (herdrx.Agent, error) {
+	if f.unnamed && len(f.renames) == 0 {
+		return herdrx.Agent{}, herdrx.ErrNotFound
+	}
+	if f.getErr != nil {
+		return herdrx.Agent{}, f.getErr
+	}
 	status := f.waitStatus
 	if status == "" {
 		status = "idle"
 	}
 	return herdrx.Agent{Name: target, Status: status, InteractiveReady: status == "idle" || status == "done"}, nil
+}
+func (f *fakeClient) RenameAgent(ctx context.Context, target, name string) (herdrx.Agent, error) {
+	f.renames = append(f.renames, renameCall{Target: target, Name: name})
+	if f.renameErr != nil {
+		return herdrx.Agent{}, f.renameErr
+	}
+	return herdrx.Agent{Name: name, PaneID: target, Status: "idle"}, nil
 }
 func (f *fakeClient) WaitAgent(ctx context.Context, target string, until []string, timeoutMS int) (herdrx.Agent, error) {
 	if f.waitErr != nil {
@@ -261,8 +283,11 @@ func TestNewStartsClaudeAutoAndPrompts(t *testing.T) {
 	if len(st.Args) != 2 || st.Args[0] != "--permission-mode" || st.Args[1] != "auto" {
 		t.Fatalf("auto args: %v", st.Args)
 	}
-	if len(fc.prompts) != 1 || fc.prompts[0].Target != "w3:p1" || fc.prompts[0].Text != "fix the login redirect" {
+	if len(fc.prompts) != 1 || fc.prompts[0].Target != "fix-login" || fc.prompts[0].Text != "fix the login redirect" {
 		t.Fatalf("prompt: %+v", fc.prompts)
+	}
+	if len(fc.renames) != 0 {
+		t.Fatalf("rename: %+v", fc.renames)
 	}
 	if len(fc.closes) != 0 {
 		t.Fatalf("unexpected close: %v", fc.closes)
@@ -287,6 +312,24 @@ func TestNewStartsClaudeAutoAndPrompts(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].WorkspaceID != "w3" {
 		t.Fatalf("ls: %s", out.String())
+	}
+}
+
+func TestNewRenamesUnnamedAgentThenPrompts(t *testing.T) {
+	fc := &fakeClient{
+		pong:    herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		unnamed: true,
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+
+	if code := app.run(dir, "--json", "new", "--cwd", t.TempDir(), "--kind", "grok", "--label", "pull-latest-changes", "pull latest changes"); code != 0 {
+		t.Fatalf("new: %s", errb.String())
+	}
+	if len(fc.renames) != 1 || fc.renames[0].Target != "w3:p1" || fc.renames[0].Name != "pull-latest-changes" {
+		t.Fatalf("rename: %+v", fc.renames)
+	}
+	if len(fc.prompts) != 1 || fc.prompts[0].Target != "pull-latest-changes" {
+		t.Fatalf("prompt: %+v", fc.prompts)
 	}
 }
 
