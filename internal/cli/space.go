@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/timjonez/herd-orchestrator-cli/internal/herdrx"
@@ -176,7 +177,7 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 		if ready.Status == "blocked" {
 			return fmt.Errorf("prompt agent %s in %s: agent is blocked", name, sp.WorkspaceID)
 		}
-		if _, err := c.PromptAgent(ctx, name, opt.prompt); err != nil {
+		if err := promptNamed(ctx, c, name, opt.prompt); err != nil {
 			return fmt.Errorf("prompt agent %s in %s: %w", name, sp.WorkspaceID, err)
 		}
 	}
@@ -239,10 +240,71 @@ func waitUntilPromptable(ctx context.Context, c herdrx.Client, target string) (h
 	if err != nil {
 		return herdrx.Agent{}, err
 	}
-	if ag.Status != "" {
+	if ag.Status == "blocked" {
 		return ag, nil
 	}
-	return c.GetAgent(ctx, target)
+	deadline := time.Now().Add(time.Duration(promptReadyTimeoutMS) * time.Millisecond)
+	for {
+		g, gerr := c.GetAgent(ctx, target)
+		if gerr == nil {
+			if g.Status == "blocked" {
+				return g, nil
+			}
+			if agentPromptable(g, target) {
+				return g, nil
+			}
+			ag = g
+		}
+		if time.Now().After(deadline) {
+			if gerr != nil {
+				return herdrx.Agent{}, gerr
+			}
+			if ag.Status != "" {
+				return ag, nil
+			}
+			return herdrx.Agent{}, fmt.Errorf("agent %s not promptable", target)
+		}
+		select {
+		case <-ctx.Done():
+			return herdrx.Agent{}, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+func agentPromptable(ag herdrx.Agent, name string) bool {
+	if ag.LaunchPending {
+		return false
+	}
+	if name != "" && ag.Name != name {
+		return false
+	}
+	switch ag.Status {
+	case "idle", "done":
+		return ag.InteractiveReady
+	default:
+		return false
+	}
+}
+
+func promptNamed(ctx context.Context, c herdrx.Client, name, text string) error {
+	var last error
+	for i := 0; i < 25; i++ {
+		if _, err := c.PromptAgent(ctx, name, text); err == nil {
+			return nil
+		} else {
+			last = err
+			if !herdrx.IsAgentNotReady(err) {
+				return err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	return last
 }
 
 func permissionArgs(kind string, manual bool) []string {
