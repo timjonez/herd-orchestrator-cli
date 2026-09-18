@@ -28,11 +28,11 @@ herd notify --title TEXT [--body TEXT] [--sound request|done|none]
 herd new [prompt...] [--label TEXT] [--cwd PATH] [--name AGENT]
          [--kind claude] [--manual] [--focus]
 herd ls
-herd down <workspace|name> [--force]
+herd down <workspace|label|name> [--force]
 herd version
 ```
 
-`new` creates a Herdr workspace, starts an agent in the root pane, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`; `--manual` skips that. `ls` and `down` only see workspaces `herd new` created. `down` refuses if that workspace still has open queue items unless `--force` is set.
+`new` creates a Herdr workspace, starts an agent in the root pane, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`; `--manual` skips that. `ls` lists every live Herdr workspace. `down` closes any of those, by workspace id, unique label, or unique agent name. It refuses if that workspace still has open queue items unless `--force` is set.
 
 `watch` is a blocking daemon. Status goes to stderr. `--json` writes one JSONL object per new or updated queue item on stdout.
 
@@ -54,7 +54,6 @@ When `HERDR_PANE_ID` is set, that pane is ignored (the watcher does not queue it
 
 ```
 $XDG_DATA_HOME/herd/<session>/queue.json
-$XDG_DATA_HOME/herd/<session>/spaces.json
 # or ~/.local/share/herd/<session>/
 ```
 

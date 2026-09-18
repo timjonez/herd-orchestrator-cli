@@ -79,7 +79,7 @@ func (a *App) rootCmd() *cobra.Command {
 
 	root.PersistentFlags().StringVar(&a.Socket, "socket", "", "Herdr Unix socket (default: HERDR_SOCKET_PATH or ~/.config/herdr/herdr.sock)")
 	root.PersistentFlags().StringVar(&a.Session, "session", "", "Herdr session name (default: HERDR_SESSION)")
-	root.PersistentFlags().StringVar(&a.StateDir, "state-dir", "", "state root for queue and spaces (default: HERD_STATE_DIR or $XDG_DATA_HOME/herd)")
+	root.PersistentFlags().StringVar(&a.StateDir, "state-dir", "", "state root for the pending queue (default: HERD_STATE_DIR or $XDG_DATA_HOME/herd)")
 	root.PersistentFlags().BoolVarP(&a.Quiet, "quiet", "q", false, "minimal human output")
 	root.PersistentFlags().BoolVar(&a.JSON, "json", false, "JSON output on stdout; errors as JSON on stderr")
 

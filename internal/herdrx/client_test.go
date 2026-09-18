@@ -252,6 +252,21 @@ func TestCreateStartPromptClose(t *testing.T) {
 					},
 				},
 			})
+		case "workspace.list":
+			writeLine(t, w, map[string]any{
+				"id": id,
+				"result": map[string]any{
+					"type": "workspace_list",
+					"workspaces": []map[string]any{{
+						"workspace_id": "w3",
+						"label":        "fix-login",
+						"number":       3,
+						"focused":      true,
+						"pane_count":   1,
+						"agent_status": "idle",
+					}},
+				},
+			})
 		case "workspace.close":
 			writeLine(t, w, map[string]any{
 				"id":     id,
@@ -307,13 +322,21 @@ func TestCreateStartPromptClose(t *testing.T) {
 		t.Fatalf("prompt should not wait: %+v", lastParams)
 	}
 
+	listed, err := c.ListWorkspaces(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].WorkspaceID != "w3" || listed[0].Label != "fix-login" || listed[0].AgentStatus != "idle" {
+		t.Fatalf("listed: %+v", listed)
+	}
+
 	if err := c.CloseWorkspace(ctx, "w3"); err != nil {
 		t.Fatal(err)
 	}
 	if lastParams["workspace_id"] != "w3" {
 		t.Fatalf("close params: %+v", lastParams)
 	}
-	want := []string{"workspace.create", "agent.start", "agent.prompt", "workspace.close"}
+	want := []string{"workspace.create", "agent.start", "agent.prompt", "workspace.list", "workspace.close"}
 	if len(methods) != len(want) {
 		t.Fatalf("methods: %v", methods)
 	}

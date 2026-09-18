@@ -67,6 +67,11 @@ type Workspace struct {
 	WorkspaceID string `json:"workspace_id"`
 	Label       string `json:"label"`
 	Number      int    `json:"number"`
+	Focused     bool   `json:"focused"`
+	PaneCount   int    `json:"pane_count,omitempty"`
+	TabCount    int    `json:"tab_count,omitempty"`
+	ActiveTabID string `json:"active_tab_id,omitempty"`
+	AgentStatus string `json:"agent_status,omitempty"`
 }
 
 // Tab is a Herdr tab record.
