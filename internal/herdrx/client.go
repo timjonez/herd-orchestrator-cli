@@ -19,6 +19,7 @@ type Client interface {
 	ReadAgent(ctx context.Context, target, source string, lines int) (Read, error)
 	Notify(ctx context.Context, title, body, sound string) (Notification, error)
 	CreateWorkspace(ctx context.Context, in WorkspaceCreate) (WorkspaceCreated, error)
+	ListWorkspaces(ctx context.Context) ([]Workspace, error)
 	CloseWorkspace(ctx context.Context, workspaceID string) error
 	StartAgent(ctx context.Context, in AgentStart) (Agent, error)
 	GetAgent(ctx context.Context, target string) (Agent, error)
@@ -224,6 +225,24 @@ func (c *Conn) CreateWorkspace(ctx context.Context, in WorkspaceCreate) (Workspa
 		return WorkspaceCreated{}, fmt.Errorf("%w: workspace.create returned no ids", ErrInvalid)
 	}
 	return out, nil
+}
+
+func (c *Conn) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	raw, err := c.call(ctx, "workspace.list", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Type       string      `json:"type"`
+		Workspaces []Workspace `json:"workspaces"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	if out.Workspaces == nil {
+		out.Workspaces = []Workspace{}
+	}
+	return out.Workspaces, nil
 }
 
 func (c *Conn) CloseWorkspace(ctx context.Context, workspaceID string) error {
