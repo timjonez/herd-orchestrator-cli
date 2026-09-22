@@ -32,7 +32,7 @@ herd down <workspace|label|name> [--force]
 herd version
 ```
 
-`new` creates a Herdr workspace, starts an agent in the root pane, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`; `--manual` skips that. `ls` lists every live Herdr workspace. `down` closes any of those, by workspace id, unique label, or unique agent name. It refuses if that workspace still has open queue items unless `--force` is set.
+`new` creates a Herdr workspace, starts an agent in the root pane, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`. `--manual` starts Claude with `--permission-mode manual`, because omitting the flag leaves Claude Code on its built-in auto default. `ls` lists every live Herdr workspace. `down` closes any of those, by workspace id, unique label, or unique agent name. It refuses if that workspace still has open queue items unless `--force` is set.
 
 `watch` is a blocking daemon. Status goes to stderr. `--json` writes one JSONL object per new or updated queue item on stdout.
 

@@ -371,7 +371,11 @@ func TestNewManualAndNoPrompt(t *testing.T) {
 	if len(fc.creates) != 1 || !fc.creates[0].Focus {
 		t.Fatalf("create: %+v", fc.creates)
 	}
-	if len(fc.starts) != 1 || len(fc.starts[0].Args) != 0 {
+	if len(fc.starts) != 1 {
+		t.Fatalf("start args: %+v", fc.starts)
+	}
+	st := fc.starts[0]
+	if len(st.Args) != 2 || st.Args[0] != "--permission-mode" || st.Args[1] != "manual" {
 		t.Fatalf("start args: %+v", fc.starts)
 	}
 	if len(fc.prompts) != 0 {

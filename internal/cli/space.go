@@ -28,7 +28,7 @@ func (a *App) newCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "new [prompt...]",
 		Short: "Create a workspace, start Claude, and submit a prompt",
-		Long:  "Create a Herdr workspace, start an agent in its root pane, and submit an optional prompt. Does not wait. Claude defaults to --permission-mode auto; pass --manual to skip that.",
+		Long:  "Create a Herdr workspace, start an agent in its root pane, and submit an optional prompt. Does not wait. Claude defaults to --permission-mode auto. Pass --manual to start Claude with --permission-mode manual.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt := strings.TrimSpace(strings.Join(args, " "))
 			return a.runNew(cmd.Context(), newOpts{
@@ -46,7 +46,7 @@ func (a *App) newCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cwd, "cwd", "", "working directory (default: current directory)")
 	cmd.Flags().StringVar(&name, "name", "", "agent name (default: from label)")
 	cmd.Flags().StringVar(&kind, "kind", "claude", "Herdr agent kind")
-	cmd.Flags().BoolVar(&manual, "manual", false, "do not pass --permission-mode auto (Claude only)")
+	cmd.Flags().BoolVar(&manual, "manual", false, "start Claude with --permission-mode manual")
 	cmd.Flags().BoolVar(&focus, "focus", false, "focus the new workspace")
 	return cmd
 }
@@ -134,12 +134,12 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 		return err
 	}
 
-	autoArgs := permissionArgs(kind, opt.manual)
+	agentArgs, auto := permissionArgs(kind, opt.manual)
 	started, err := startAgentWhenShellReady(ctx, c, herdrx.AgentStart{
 		Name:   name,
 		Kind:   kind,
 		PaneID: created.RootPane.PaneID,
-		Args:   autoArgs,
+		Args:   agentArgs,
 	})
 	if err != nil {
 		if cerr := c.CloseWorkspace(ctx, created.Workspace.WorkspaceID); cerr != nil {
@@ -159,7 +159,7 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 		Kind:        kind,
 		Label:       label,
 		Cwd:         cwd,
-		Auto:        len(autoArgs) > 0,
+		Auto:        auto,
 		Prompt:      opt.prompt,
 		CreatedAt:   a.now(),
 	}
@@ -326,11 +326,17 @@ func promptNamed(ctx context.Context, c herdrx.Client, name, text string) error 
 	return last
 }
 
-func permissionArgs(kind string, manual bool) []string {
-	if manual || !strings.EqualFold(kind, "claude") {
-		return nil
+// permissionArgs is the Claude argv for this launch. Claude Code's built-in
+// default is auto, so manual mode has to be requested by name. The CLI value
+// "manual" is the alias for the config mode "default".
+func permissionArgs(kind string, manual bool) (args []string, auto bool) {
+	if !strings.EqualFold(kind, "claude") {
+		return nil, false
 	}
-	return []string{"--permission-mode", "auto"}
+	if manual {
+		return []string{"--permission-mode", "manual"}, false
+	}
+	return []string{"--permission-mode", "auto"}, true
 }
 
 func resolveCwd(raw string) (string, error) {
