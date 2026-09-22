@@ -17,7 +17,7 @@ herd ls
 herd down fix-login
 ```
 
-`herd new` creates a Herdr workspace, starts Claude with `--permission-mode auto`, submits the prompt, and returns. It does not wait. Pass `--manual` to skip auto mode. `down` only closes workspaces `herd new` created.
+`herd new` creates a Herdr workspace, starts Claude with `--permission-mode auto`, submits the prompt, and returns. It does not wait. Pass `--manual` to start Claude with `--permission-mode manual`. `down` only closes workspaces `herd new` created.
 
 ## Do not implement the watch loop
 
