@@ -45,6 +45,9 @@ func (f *fakeClient) Notify(ctx context.Context, title, body, sound string) (her
 func (f *fakeClient) CreateWorkspace(ctx context.Context, in herdrx.WorkspaceCreate) (herdrx.WorkspaceCreated, error) {
 	return herdrx.WorkspaceCreated{}, nil
 }
+func (f *fakeClient) ListWorkspaces(ctx context.Context) ([]herdrx.Workspace, error) {
+	return []herdrx.Workspace{}, nil
+}
 func (f *fakeClient) CloseWorkspace(ctx context.Context, workspaceID string) error {
 	return nil
 }

@@ -54,28 +54,34 @@ func (a *App) newCmd() *cobra.Command {
 func (a *App) lsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "ls",
-		Short: "List workspaces created by herd new",
+		Short: "List live Herdr workspaces",
+		Long:  "List every workspace in the current Herdr session.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			st, err := a.spaceStore()
-			if err != nil {
-				return err
-			}
-			list, err := st.List()
-			if err != nil {
-				return err
-			}
-			return a.emitAlways(list, func() {
-				printSpaces(a.Stdout, list)
-			})
+			return a.runLs(cmd.Context())
 		},
 	}
+}
+
+func (a *App) runLs(ctx context.Context) error {
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	list, err := c.ListWorkspaces(ctx)
+	if err != nil {
+		return err
+	}
+	return a.emitAlways(list, func() {
+		printWorkspaces(a.Stdout, list)
+	})
 }
 
 func (a *App) downCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "down <workspace|name>",
-		Short: "Close a workspace created by herd new",
+		Use:   "down <workspace|label|name>",
+		Short: "Close a live Herdr workspace",
+		Long:  "Close a workspace shown by herd ls. Accepts a workspace id, unique label, or unique agent name. Refuses if that workspace still has open queue items unless --force is set.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.runDown(cmd.Context(), args[0], force)
@@ -155,15 +161,7 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 		Cwd:         cwd,
 		Auto:        auto,
 		Prompt:      opt.prompt,
-	}
-	st, err := a.spaceStore()
-	if err != nil {
-		_ = c.CloseWorkspace(ctx, sp.WorkspaceID)
-		return err
-	}
-	if _, err := st.Put(sp, a.now()); err != nil {
-		_ = c.CloseWorkspace(ctx, sp.WorkspaceID)
-		return err
+		CreatedAt:   a.now(),
 	}
 
 	if opt.prompt != "" {
@@ -357,48 +355,104 @@ func resolveCwd(raw string) (string, error) {
 }
 
 func (a *App) runDown(ctx context.Context, id string, force bool) error {
-	st, err := a.spaceStore()
-	if err != nil {
-		return err
-	}
-	sp, err := st.Get(id)
-	if err != nil {
-		return err
-	}
-
-	open, err := a.openQueueFor(sp.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	if n := len(open); n > 0 && !force {
-		return fmt.Errorf("%w: workspace %s has %d open queue items (use --force)", spaces.ErrConflict, sp.WorkspaceID, n)
-	}
-
 	c, err := a.client()
 	if err != nil {
 		return err
 	}
-	closeErr := c.CloseWorkspace(ctx, sp.WorkspaceID)
+	ws, err := resolveWorkspace(ctx, c, id)
+	if err != nil {
+		return err
+	}
+
+	open, err := a.openQueueFor(ws.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if n := len(open); n > 0 && !force {
+		return fmt.Errorf("%w: workspace %s has %d open queue items (use --force)", spaces.ErrConflict, ws.WorkspaceID, n)
+	}
+
+	closeErr := c.CloseWorkspace(ctx, ws.WorkspaceID)
 	if closeErr != nil && !errors.Is(closeErr, herdrx.ErrNotFound) {
 		return closeErr
 	}
 	alreadyGone := errors.Is(closeErr, herdrx.ErrNotFound)
 
-	if err := a.dismissWorkspaceQueue(sp.WorkspaceID); err != nil {
+	if err := a.dismissWorkspaceQueue(ws.WorkspaceID); err != nil {
 		return err
 	}
 
-	if _, err := st.Remove(sp.WorkspaceID); err != nil {
-		return err
-	}
-
-	return a.emit(sp, true, func() {
+	return a.emit(ws, true, func() {
 		if alreadyGone {
-			fmt.Fprintf(a.Stdout, "removed %s (workspace already closed)\n", sp.WorkspaceID)
+			fmt.Fprintf(a.Stdout, "removed %s (workspace already closed)\n", ws.WorkspaceID)
 			return
 		}
-		fmt.Fprintf(a.Stdout, "closed %s %s\n", sp.WorkspaceID, sp.Name)
+		if ws.Label != "" && ws.Label != ws.WorkspaceID {
+			fmt.Fprintf(a.Stdout, "closed %s %s\n", ws.WorkspaceID, ws.Label)
+			return
+		}
+		fmt.Fprintf(a.Stdout, "closed %s\n", ws.WorkspaceID)
 	})
+}
+
+func resolveWorkspace(ctx context.Context, c herdrx.Client, id string) (herdrx.Workspace, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return herdrx.Workspace{}, fmt.Errorf("%w: empty workspace id", herdrx.ErrInvalid)
+	}
+	live, err := c.ListWorkspaces(ctx)
+	if err != nil {
+		return herdrx.Workspace{}, err
+	}
+	for _, w := range live {
+		if w.WorkspaceID == id {
+			return w, nil
+		}
+	}
+	var byLabel []herdrx.Workspace
+	for _, w := range live {
+		if w.Label == id {
+			byLabel = append(byLabel, w)
+		}
+	}
+	switch len(byLabel) {
+	case 1:
+		return byLabel[0], nil
+	case 0:
+	default:
+		return herdrx.Workspace{}, fmt.Errorf("%w: label %q matches %d workspaces", spaces.ErrConflict, id, len(byLabel))
+	}
+
+	agents, err := c.ListAgents(ctx)
+	if err != nil {
+		return herdrx.Workspace{}, err
+	}
+	seen := map[string]herdrx.Workspace{}
+	for _, ag := range agents {
+		if ag.Name != id || ag.WorkspaceID == "" {
+			continue
+		}
+		if _, ok := seen[ag.WorkspaceID]; ok {
+			continue
+		}
+		for _, w := range live {
+			if w.WorkspaceID == ag.WorkspaceID {
+				seen[ag.WorkspaceID] = w
+				break
+			}
+		}
+	}
+	switch len(seen) {
+	case 1:
+		for _, w := range seen {
+			return w, nil
+		}
+	case 0:
+		return herdrx.Workspace{}, fmt.Errorf("%w: workspace %q", herdrx.ErrNotFound, id)
+	default:
+		return herdrx.Workspace{}, fmt.Errorf("%w: name %q matches %d workspaces", spaces.ErrConflict, id, len(seen))
+	}
+	return herdrx.Workspace{}, fmt.Errorf("%w: workspace %q", herdrx.ErrNotFound, id)
 }
 
 func (a *App) openQueueFor(workspaceID string) ([]queue.Item, error) {
@@ -439,23 +493,24 @@ func (a *App) dismissWorkspaceQueue(workspaceID string) error {
 	return nil
 }
 
-func (a *App) spaceStore() (*spaces.Store, error) {
-	return spaces.Open(spaces.DirFor(a.stateDir(), a.sessionKey()))
-}
-
-func printSpaces(w io.Writer, list []spaces.Space) {
+func printWorkspaces(w io.Writer, list []herdrx.Workspace) {
 	if len(list) == 0 {
 		fmt.Fprintln(w, "(no workspaces)")
 		return
 	}
-	type row struct{ ws, agent, kind, cwd string }
+	type row struct{ ws, label, status, panes string }
 	rows := make([]row, 0, len(list))
-	widths := [4]int{9, 5, 4, 3}
-	headers := [4]string{"Workspace", "Agent", "Kind", "Cwd"}
-	for _, sp := range list {
-		r := row{ws: sp.WorkspaceID, agent: sp.Name, kind: sp.Kind, cwd: sp.Cwd}
+	widths := [4]int{9, 5, 6, 5}
+	headers := [4]string{"Workspace", "Label", "Status", "Panes"}
+	for _, ws := range list {
+		r := row{
+			ws:     ws.WorkspaceID,
+			label:  ws.Label,
+			status: ws.AgentStatus,
+			panes:  fmt.Sprintf("%d", ws.PaneCount),
+		}
 		rows = append(rows, r)
-		vals := [4]string{r.ws, r.agent, r.kind, r.cwd}
+		vals := [4]string{r.ws, r.label, r.status, r.panes}
 		for i, v := range vals {
 			if len(v) > widths[i] {
 				widths[i] = len(v)
@@ -471,9 +526,9 @@ func printSpaces(w io.Writer, list []spaces.Space) {
 	for _, r := range rows {
 		fmt.Fprintf(w, "%-*s  %-*s  %-*s  %s\n",
 			widths[0], r.ws,
-			widths[1], r.agent,
-			widths[2], r.kind,
-			r.cwd,
+			widths[1], r.label,
+			widths[2], r.status,
+			r.panes,
 		)
 	}
 }

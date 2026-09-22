@@ -16,24 +16,26 @@ import (
 )
 
 type fakeClient struct {
-	agents     []herdrx.Agent
-	pong       herdrx.Pong
-	notices    []string
-	creates    []herdrx.WorkspaceCreate
-	starts     []herdrx.AgentStart
-	prompts    []promptCall
-	closes     []string
-	createErr  error
-	startErr   error
-	startBusy  int
-	promptErr  error
-	closeErr   error
-	waitStatus string
-	waitErr    error
-	getErr     error
-	renameErr  error
-	renames    []renameCall
-	unnamed    bool
+	agents            []herdrx.Agent
+	workspaces        []herdrx.Workspace
+	pong              herdrx.Pong
+	notices           []string
+	creates           []herdrx.WorkspaceCreate
+	starts            []herdrx.AgentStart
+	prompts           []promptCall
+	closes            []string
+	createErr         error
+	startErr          error
+	startBusy         int
+	promptErr         error
+	closeErr          error
+	listWorkspacesErr error
+	waitStatus        string
+	waitErr           error
+	getErr            error
+	renameErr         error
+	renames           []renameCall
+	unnamed           bool
 }
 
 type renameCall struct {
@@ -66,15 +68,35 @@ func (f *fakeClient) CreateWorkspace(ctx context.Context, in herdrx.WorkspaceCre
 		return herdrx.WorkspaceCreated{}, f.createErr
 	}
 	id := fmt.Sprintf("w%d", len(f.creates)+2)
+	ws := herdrx.Workspace{WorkspaceID: id, Label: in.Label}
+	f.workspaces = append(f.workspaces, ws)
 	return herdrx.WorkspaceCreated{
-		Workspace: herdrx.Workspace{WorkspaceID: id, Label: in.Label},
+		Workspace: ws,
 		Tab:       herdrx.Tab{TabID: id + ":t1", WorkspaceID: id},
 		RootPane:  herdrx.Pane{PaneID: id + ":p1", WorkspaceID: id, TabID: id + ":t1"},
 	}, nil
 }
+func (f *fakeClient) ListWorkspaces(ctx context.Context) ([]herdrx.Workspace, error) {
+	if f.listWorkspacesErr != nil {
+		return nil, f.listWorkspacesErr
+	}
+	out := make([]herdrx.Workspace, len(f.workspaces))
+	copy(out, f.workspaces)
+	return out, nil
+}
 func (f *fakeClient) CloseWorkspace(ctx context.Context, workspaceID string) error {
 	f.closes = append(f.closes, workspaceID)
-	return f.closeErr
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	kept := f.workspaces[:0]
+	for _, w := range f.workspaces {
+		if w.WorkspaceID != workspaceID {
+			kept = append(kept, w)
+		}
+	}
+	f.workspaces = kept
+	return nil
 }
 func (f *fakeClient) StartAgent(ctx context.Context, in herdrx.AgentStart) (herdrx.Agent, error) {
 	f.starts = append(f.starts, in)
@@ -311,7 +333,7 @@ func TestNewStartsClaudeAutoAndPrompts(t *testing.T) {
 	if code := app.run(dir, "--json", "ls"); code != 0 {
 		t.Fatalf("ls: %s", errb.String())
 	}
-	var list []spaces.Space
+	var list []herdrx.Workspace
 	if err := json.Unmarshal(out.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
@@ -427,16 +449,15 @@ func TestNewSkipsPromptWhenBlocked(t *testing.T) {
 	if len(fc.prompts) != 0 {
 		t.Fatalf("prompted while blocked: %+v", fc.prompts)
 	}
-	st, err := spaces.Open(spaces.DirFor(dir, "default"))
-	if err != nil {
-		t.Fatal(err)
+	if len(fc.closes) != 0 {
+		t.Fatalf("closed after blocked: %v", fc.closes)
 	}
-	if _, err := st.Get("w3"); err != nil {
-		t.Fatalf("should still record: %v", err)
+	if len(fc.workspaces) != 1 || fc.workspaces[0].WorkspaceID != "w3" {
+		t.Fatalf("live: %+v", fc.workspaces)
 	}
 }
 
-func TestNewPromptFailureStillRecords(t *testing.T) {
+func TestNewPromptFailureLeavesWorkspace(t *testing.T) {
 	fc := &fakeClient{
 		pong:      herdrx.Pong{Version: "0.8.0", Protocol: 19},
 		promptErr: fmt.Errorf("stalled"),
@@ -445,13 +466,11 @@ func TestNewPromptFailureStillRecords(t *testing.T) {
 	if code := app.run(dir, "new", "--cwd", t.TempDir(), "--label", "fix-login", "do the thing"); code != 1 {
 		t.Fatalf("code=%d err=%s", code, errb.String())
 	}
-	st, err := spaces.Open(spaces.DirFor(dir, "default"))
-	if err != nil {
-		t.Fatal(err)
+	if len(fc.closes) != 0 {
+		t.Fatalf("closed after prompt failure: %v", fc.closes)
 	}
-	got, err := st.Get("w3")
-	if err != nil || got.Name != "fix-login" {
-		t.Fatalf("recorded: %v %+v", err, got)
+	if len(fc.workspaces) != 1 || fc.workspaces[0].WorkspaceID != "w3" {
+		t.Fatalf("live: %+v", fc.workspaces)
 	}
 }
 
@@ -483,14 +502,6 @@ func TestNewClosesWorkspaceWhenStartFails(t *testing.T) {
 	}
 	if len(fc.creates) != 1 || len(fc.closes) != 1 || fc.closes[0] != "w3" {
 		t.Fatalf("creates=%v closes=%v", fc.creates, fc.closes)
-	}
-	st, err := spaces.Open(spaces.DirFor(dir, "default"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	list, err := st.List()
-	if err != nil || len(list) != 0 {
-		t.Fatalf("recorded: %v %+v", err, list)
 	}
 }
 
@@ -528,6 +539,122 @@ func TestDownUnknown(t *testing.T) {
 		t.Fatalf("code=%d err=%s", code, errb.String())
 	}
 	if !strings.Contains(errb.String(), "not_found") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+}
+
+func TestDownClosesUnrecordedWorkspace(t *testing.T) {
+	fc := &fakeClient{
+		pong:       herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		workspaces: []herdrx.Workspace{{WorkspaceID: "w59", Label: "bts"}},
+	}
+	app, dir, out, errb := newTestApp(t, fc)
+	if code := app.run(dir, "down", "bts"); code != 0 {
+		t.Fatalf("down: %s", errb.String())
+	}
+	if len(fc.closes) != 1 || fc.closes[0] != "w59" {
+		t.Fatalf("closes: %v out=%s", fc.closes, out.String())
+	}
+	if !strings.Contains(out.String(), "closed w59 bts") {
+		t.Fatalf("out: %s", out.String())
+	}
+
+	out.Reset()
+	if code := app.run(dir, "ls"); code != 0 {
+		t.Fatalf("ls: %s", errb.String())
+	}
+	if !strings.Contains(out.String(), "(no workspaces)") {
+		t.Fatalf("ls after down: %s", out.String())
+	}
+}
+
+func TestDownByAgentName(t *testing.T) {
+	fc := &fakeClient{
+		pong:       herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		workspaces: []herdrx.Workspace{{WorkspaceID: "w59", Label: "bts"}},
+		agents:     []herdrx.Agent{{Name: "reviewer", WorkspaceID: "w59"}},
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "down", "reviewer"); code != 0 {
+		t.Fatalf("down: %s", errb.String())
+	}
+	if len(fc.closes) != 1 || fc.closes[0] != "w59" {
+		t.Fatalf("closes: %v", fc.closes)
+	}
+}
+
+func TestDownAmbiguousLabel(t *testing.T) {
+	fc := &fakeClient{
+		pong: herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		workspaces: []herdrx.Workspace{
+			{WorkspaceID: "w1", Label: "bts"},
+			{WorkspaceID: "w2", Label: "bts"},
+		},
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "--json", "down", "bts"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "conflict") {
+		t.Fatalf("stderr: %s", errb.String())
+	}
+	if len(fc.closes) != 0 {
+		t.Fatalf("closed on conflict: %v", fc.closes)
+	}
+}
+
+func TestLsListsLiveHerdrWorkspaces(t *testing.T) {
+	fc := &fakeClient{
+		pong: herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		workspaces: []herdrx.Workspace{
+			{WorkspaceID: "w59", Label: "bts", AgentStatus: "idle", PaneCount: 1},
+			{WorkspaceID: "w6G", Label: "wintrust", AgentStatus: "working", PaneCount: 2},
+		},
+	}
+	app, dir, out, errb := newTestApp(t, fc)
+
+	if code := app.run(dir, "--json", "ls"); code != 0 {
+		t.Fatalf("ls: %s", errb.String())
+	}
+	var list []herdrx.Workspace
+	if err := json.Unmarshal(out.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 || list[0].WorkspaceID != "w59" || list[1].WorkspaceID != "w6G" {
+		t.Fatalf("ls: %s", out.String())
+	}
+
+	out.Reset()
+	if code := app.run(dir, "ls"); code != 0 {
+		t.Fatalf("ls human: %s", errb.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "w59") || !strings.Contains(got, "bts") || !strings.Contains(got, "w6G") {
+		t.Fatalf("human ls: %s", got)
+	}
+}
+
+func TestLsEmptyWhenHerdrHasNone(t *testing.T) {
+	fc := &fakeClient{pong: herdrx.Pong{Version: "0.8.0", Protocol: 19}}
+	app, dir, out, errb := newTestApp(t, fc)
+	if code := app.run(dir, "ls"); code != 0 {
+		t.Fatalf("ls: %s", errb.String())
+	}
+	if !strings.Contains(out.String(), "(no workspaces)") {
+		t.Fatalf("ls: %s", out.String())
+	}
+}
+
+func TestLsFailsWhenHerdrUnavailable(t *testing.T) {
+	fc := &fakeClient{
+		pong:              herdrx.Pong{Version: "0.8.0", Protocol: 19},
+		listWorkspacesErr: herdrx.ErrUnavailable,
+	}
+	app, dir, _, errb := newTestApp(t, fc)
+	if code := app.run(dir, "ls"); code != 1 {
+		t.Fatalf("code=%d err=%s", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "unavailable") {
 		t.Fatalf("stderr: %s", errb.String())
 	}
 }
