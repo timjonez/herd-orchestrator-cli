@@ -74,6 +74,8 @@ func Classify(in Input) Result {
 	switch status {
 	case "blocked":
 		return Result{Kind: KindNeedsDecision, Reason: "herdr blocked"}
+	case "error":
+		return Result{Kind: KindNeedsDecision, Reason: "herdr error"}
 	case "unknown":
 		if strong || (prev == "working" && prompt) {
 			return Result{Kind: KindNeedsDecision, Reason: "unknown with question"}

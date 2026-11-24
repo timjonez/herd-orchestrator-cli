@@ -63,7 +63,7 @@ func (a *App) lsCmd() *cobra.Command {
 }
 
 func (a *App) runLs(ctx context.Context) error {
-	c, err := a.client()
+	c, _, err := a.client(ctx)
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,7 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 		kind = "claude"
 	}
 
-	c, err := a.client()
+	c, _, err := a.client(ctx)
 	if err != nil {
 		return err
 	}
@@ -125,43 +125,77 @@ func (a *App) runNew(ctx context.Context, opt newOpts) error {
 		return err
 	}
 
-	created, err := c.CreateWorkspace(ctx, herdrx.WorkspaceCreate{
-		Cwd:   cwd,
-		Label: label,
-		Focus: opt.focus,
-	})
-	if err != nil {
-		return err
-	}
-
 	agentArgs, auto := permissionArgs(kind, opt.manual)
-	started, err := startAgentWhenShellReady(ctx, c, herdrx.AgentStart{
-		Name:   name,
-		Kind:   kind,
-		PaneID: created.RootPane.PaneID,
-		Args:   agentArgs,
-	})
-	if err != nil {
-		if cerr := c.CloseWorkspace(ctx, created.Workspace.WorkspaceID); cerr != nil {
-			return fmt.Errorf("start agent: %w (also failed to close %s: %v)", err, created.Workspace.WorkspaceID, cerr)
-		}
-		return fmt.Errorf("start agent: %w", err)
-	}
-	if started.Name != "" {
-		name = started.Name
-	}
+	var sp spaces.Space
 
-	sp := spaces.Space{
-		WorkspaceID: created.Workspace.WorkspaceID,
-		TabID:       created.Tab.TabID,
-		PaneID:      created.RootPane.PaneID,
-		Name:        name,
-		Kind:        kind,
-		Label:       label,
-		Cwd:         cwd,
-		Auto:        auto,
-		Prompt:      opt.prompt,
-		CreatedAt:   a.now(),
+	if launcher, ok := c.(herdrx.TerminalLauncher); ok {
+		launched, err := launcher.LaunchAgent(ctx, herdrx.AgentLaunch{
+			Cwd:   cwd,
+			Label: label,
+			Name:  name,
+			Kind:  kind,
+			Args:  agentArgs,
+		})
+		if err != nil {
+			return fmt.Errorf("start agent: %w", err)
+		}
+		if launched.Name != "" {
+			name = launched.Name
+		}
+		wsID := launched.WorkspaceID
+		if wsID == "" {
+			wsID = launched.PaneID
+		}
+		sp = spaces.Space{
+			WorkspaceID: wsID,
+			TabID:       launched.TabID,
+			PaneID:      launched.PaneID,
+			Name:        name,
+			Kind:        kind,
+			Label:       label,
+			Cwd:         cwd,
+			Auto:        auto,
+			Prompt:      opt.prompt,
+			CreatedAt:   a.now(),
+		}
+	} else {
+		created, err := c.CreateWorkspace(ctx, herdrx.WorkspaceCreate{
+			Cwd:   cwd,
+			Label: label,
+			Focus: opt.focus,
+		})
+		if err != nil {
+			return err
+		}
+
+		started, err := startAgentWhenShellReady(ctx, c, herdrx.AgentStart{
+			Name:   name,
+			Kind:   kind,
+			PaneID: created.RootPane.PaneID,
+			Args:   agentArgs,
+		})
+		if err != nil {
+			if cerr := c.CloseWorkspace(ctx, created.Workspace.WorkspaceID); cerr != nil {
+				return fmt.Errorf("start agent: %w (also failed to close %s: %v)", err, created.Workspace.WorkspaceID, cerr)
+			}
+			return fmt.Errorf("start agent: %w", err)
+		}
+		if started.Name != "" {
+			name = started.Name
+		}
+
+		sp = spaces.Space{
+			WorkspaceID: created.Workspace.WorkspaceID,
+			TabID:       created.Tab.TabID,
+			PaneID:      created.RootPane.PaneID,
+			Name:        name,
+			Kind:        kind,
+			Label:       label,
+			Cwd:         cwd,
+			Auto:        auto,
+			Prompt:      opt.prompt,
+			CreatedAt:   a.now(),
+		}
 	}
 
 	if opt.prompt != "" {
@@ -355,7 +389,7 @@ func resolveCwd(raw string) (string, error) {
 }
 
 func (a *App) runDown(ctx context.Context, id string, force bool) error {
-	c, err := a.client()
+	c, _, err := a.client(ctx)
 	if err != nil {
 		return err
 	}
@@ -436,8 +470,8 @@ func resolveWorkspace(ctx context.Context, c herdrx.Client, id string) (herdrx.W
 			continue
 		}
 		for _, w := range live {
-			if w.WorkspaceID == ag.WorkspaceID {
-				seen[ag.WorkspaceID] = w
+			if w.WorkspaceID == ag.WorkspaceID || w.WorkspaceID == ag.PaneID {
+				seen[w.WorkspaceID] = w
 				break
 			}
 		}
@@ -466,7 +500,7 @@ func (a *App) openQueueFor(workspaceID string) ([]queue.Item, error) {
 	}
 	var out []queue.Item
 	for _, it := range items {
-		if it.WorkspaceID == workspaceID {
+		if it.WorkspaceID == workspaceID || it.PaneID == workspaceID {
 			out = append(out, it)
 		}
 	}
@@ -483,7 +517,7 @@ func (a *App) dismissWorkspaceQueue(workspaceID string) error {
 		return err
 	}
 	for _, it := range items {
-		if it.WorkspaceID != workspaceID {
+		if it.WorkspaceID != workspaceID && it.PaneID != workspaceID {
 			continue
 		}
 		if _, err := qst.Dismiss(it.ID, a.now()); err != nil {

@@ -703,3 +703,73 @@ func TestDownRefusesOpenQueueUnlessForced(t *testing.T) {
 		t.Fatalf("queue after force: %v %+v", err, open)
 	}
 }
+
+type fakeCoreClient struct {
+	fakeClient
+	launches []herdrx.AgentLaunch
+}
+
+func (f *fakeCoreClient) LaunchAgent(ctx context.Context, in herdrx.AgentLaunch) (herdrx.Agent, error) {
+	f.launches = append(f.launches, in)
+	id := fmt.Sprintf("t%d", len(f.launches)+10)
+	f.workspaces = append(f.workspaces, herdrx.Workspace{
+		WorkspaceID: id,
+		Label:       in.Label,
+		PaneCount:   1,
+		TabCount:    1,
+	})
+	return herdrx.Agent{
+		Agent:       in.Kind,
+		Name:        in.Name,
+		Status:      "idle",
+		PaneID:      id,
+		TerminalID:  id,
+		WorkspaceID: id,
+	}, nil
+}
+
+func TestCoreNewAndDown(t *testing.T) {
+	fc := &fakeCoreClient{
+		fakeClient: fakeClient{
+			pong: herdrx.Pong{Version: "0.1.21", Protocol: 1, Backend: herdrx.BackendCore},
+		},
+	}
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	app := NewApp()
+	app.Stdout = &out
+	app.Stderr = &errb
+	app.now = func() time.Time { return time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC) }
+	app.newClient = func(socket string) (herdrx.Client, error) { return fc, nil }
+
+	cwd := t.TempDir()
+	if code := app.run(dir, "--backend", "core", "--json", "new", "--cwd", cwd, "--label", "fix-core", "implement core support"); code != 0 {
+		t.Fatalf("core new: %s", errb.String())
+	}
+	if len(fc.launches) != 1 || fc.launches[0].Name != "fix-core" || fc.launches[0].Kind != "claude" {
+		t.Fatalf("launches: %+v", fc.launches)
+	}
+	if len(fc.creates) != 0 || len(fc.starts) != 0 {
+		t.Fatalf("should not call TUI workspace.create/agent.start: creates=%v starts=%v", fc.creates, fc.starts)
+	}
+	if len(fc.prompts) != 1 || fc.prompts[0].Target != "fix-core" || fc.prompts[0].Text != "implement core support" {
+		t.Fatalf("prompts: %+v", fc.prompts)
+	}
+
+	var sp spaces.Space
+	if err := json.Unmarshal(out.Bytes(), &sp); err != nil {
+		t.Fatal(err)
+	}
+	if sp.WorkspaceID != "t11" || sp.PaneID != "t11" || sp.Name != "fix-core" {
+		t.Fatalf("space: %+v", sp)
+	}
+
+	out.Reset()
+	errb.Reset()
+	if code := app.run(dir, "--backend", "core", "down", "fix-core"); code != 0 {
+		t.Fatalf("core down: %s", errb.String())
+	}
+	if len(fc.closes) != 1 || fc.closes[0] != "t11" {
+		t.Fatalf("closes: %v", fc.closes)
+	}
+}

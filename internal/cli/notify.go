@@ -22,7 +22,7 @@ func (a *App) notifyCmd() *cobra.Command {
 			if title == "" {
 				return fmt.Errorf("title is required")
 			}
-			c, err := a.client()
+			c, _, err := a.client(cmd.Context())
 			if err != nil {
 				return err
 			}

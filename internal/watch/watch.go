@@ -73,6 +73,9 @@ func (l *Loop) Run(ctx context.Context) error {
 	}
 	if l.Opts.SelfPane == "" {
 		l.Opts.SelfPane = os.Getenv("HERDR_PANE_ID")
+		if l.Opts.SelfPane == "" {
+			l.Opts.SelfPane = os.Getenv("HC_TERMINAL_ID")
+		}
 	}
 
 	l.statusf("watching %s", l.Client.Socket())
@@ -309,9 +312,9 @@ func (l *Loop) consider(ctx context.Context, a herdrx.Agent) error {
 	if l.shouldNotify(res.Kind, ups) {
 		title := notifyTitle(item)
 		body := notifyBody(item)
-		if _, err := l.Client.Notify(ctx, title, body, "request"); err != nil {
+		if n, err := l.Client.Notify(ctx, title, body, "request"); err != nil {
 			l.statusf("notify %s: %v", item.Label(), err)
-		} else {
+		} else if n.Shown {
 			notified = true
 			_ = l.Queue.MarkNotified(item.ID, l.Opts.Now())
 			item.NotifiedAt = ptrTime(l.Opts.Now())
