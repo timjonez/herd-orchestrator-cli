@@ -12,13 +12,13 @@ go install github.com/timjonez/herd-orchestrator-cli/cmd/herd@latest
 make install
 ```
 
-Requires Go 1.25+ and a running Herdr server (0.8 / protocol 19).
+Requires Go 1.25+ and a running Herdr server (`herdr-core` / `hc` or Herdr TUI 0.8+ / protocol 19).
 
 ## Commands
 
 ```text
-herd watch [--session NAME] [--socket PATH] [--ignore TARGET]...
-           [--notify] [--notify-settled] [--json]
+herd watch [--backend auto|tui|core] [--session NAME] [--socket PATH]
+           [--ignore TARGET]... [--notify] [--notify-settled] [--json]
 herd status
 herd pending [--all] [--json]
 herd show <id>
@@ -32,23 +32,27 @@ herd down <workspace|label|name> [--force]
 herd version
 ```
 
-`new` creates a Herdr workspace, starts an agent in the root pane, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`. `--manual` starts Claude with `--permission-mode manual`, because omitting the flag leaves Claude Code on its built-in auto default. `ls` lists every live Herdr workspace. `down` closes any of those, by workspace id, unique label, or unique agent name. It refuses if that workspace still has open queue items unless `--force` is set.
+`new` creates a Herdr TUI workspace (or a `herdr-core` terminal), starts an agent, and submits the prompt if given. It does not wait. Claude defaults to `--permission-mode auto`. `--manual` starts Claude with `--permission-mode manual`, because omitting the flag leaves Claude Code on its built-in auto default. `ls` lists every live Herdr workspace (or `herdr-core` terminal). `down` closes any of those, by workspace/terminal id, unique label, or unique agent name. It refuses if that workspace still has open queue items unless `--force` is set.
 
 `watch` is a blocking daemon. Status goes to stderr. `--json` writes one JSONL object per new or updated queue item on stdout.
 
-`--notify` (default on) toasts `needs_decision` items through `herdr notification.show`. `--notify-settled` is opt-in.
+`--notify` (default on) toasts `needs_decision` items through `herdr notification.show` (on Herdr TUI) or desktop notifications (`notify-send` / `osascript` when available on `herdr-core`). `--notify-settled` is opt-in.
 
 ## How it connects
 
-Resolution order for the Herdr socket:
+`herd` supports both **herdr-core** (`hc`) and **Herdr TUI** (`herdr`). Use `--backend auto|tui|core` or `HERD_BACKEND` to override auto-detection.
 
-1. `--socket` / `HERDR_SOCKET_PATH`
-2. `--session` / `HERDR_SESSION` → `~/.config/herdr/sessions/<name>/herdr.sock`
-3. `~/.config/herdr/herdr.sock`
+Resolution order in `auto` mode:
 
-`HERDR_ENV=1` is not required. The watcher can run inside a pane or as a user process.
+1. `--socket` (probes `herdr-core` `hello`, falls back to Herdr TUI)
+2. `HERDR_SOCKET_PATH` → Herdr TUI
+3. `--session` / `HERDR_SESSION` → `~/.config/herdr/sessions/<name>/herdr.sock` (Herdr TUI)
+4. `HC_TERMINAL_SOCKET` → `herdr-core`
+5. Existing local socket on disk (`$XDG_RUNTIME_DIR/herdr-core/default.sock` for `herdr-core`, `~/.config/herdr/herdr.sock` for Herdr TUI)
 
-When `HERDR_PANE_ID` is set, that pane is ignored (the watcher does not queue itself). `--ignore` accepts a pane id or a live agent name.
+`HERDR_ENV=1` is not required. The watcher can run inside a pane/terminal or as a user process.
+
+When `HERDR_PANE_ID` (Herdr TUI) or `HC_TERMINAL_ID` (`herdr-core`) is set, that pane/terminal is ignored (the watcher does not queue itself). `--ignore` accepts a pane/terminal id or a live agent name.
 
 ## Queue
 

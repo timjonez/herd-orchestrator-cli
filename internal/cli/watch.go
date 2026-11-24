@@ -26,7 +26,7 @@ func (a *App) watchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			c, err := a.client()
+			c, target, err := a.client(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -39,7 +39,7 @@ func (a *App) watchCmd() *cobra.Command {
 				Queue:  st,
 				Opts: watch.Options{
 					Ignore:         ignore,
-					SelfPane:       a.selfPane,
+					SelfPane:       a.selfTarget(target.Backend),
 					NotifyDecision: notify,
 					NotifySettled:  notifySettled,
 					Now:            a.now,

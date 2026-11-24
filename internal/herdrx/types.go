@@ -1,6 +1,9 @@
 package herdrx
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Agent is a live Herdr agent record from agent.list / session.snapshot.
 type Agent struct {
@@ -103,10 +106,26 @@ type AgentStart struct {
 	Args   []string
 }
 
-// Pong is the ping response.
+// AgentLaunch is the input to TerminalLauncher.LaunchAgent (herdr-core).
+type AgentLaunch struct {
+	Cwd   string
+	Label string
+	Name  string
+	Kind  string
+	Args  []string
+}
+
+// TerminalLauncher is implemented by backends (such as herdr-core) that create
+// a terminal and start an agent in a single RPC.
+type TerminalLauncher interface {
+	LaunchAgent(ctx context.Context, in AgentLaunch) (Agent, error)
+}
+
+// Pong is the ping / hello response.
 type Pong struct {
 	Version  string `json:"version"`
 	Protocol uint32 `json:"protocol"`
+	Backend  string `json:"backend,omitempty"`
 }
 
 // Subscription is one events.subscribe filter.

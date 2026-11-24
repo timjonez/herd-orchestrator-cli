@@ -22,8 +22,11 @@ func (a *App) statusCmd() *cobra.Command {
 				return err
 			}
 
+			target, targetErr := a.target()
+
 			out := statusJSON{
-				Socket:   a.socketPath(),
+				Backend:  target.Backend,
+				Socket:   target.Socket,
 				Session:  a.sessionKey(),
 				Queue:    st.Path(),
 				Pending:  len(open),
@@ -35,8 +38,9 @@ func (a *App) statusCmd() *cobra.Command {
 				out.ByKind[it.Kind]++
 			}
 
-			c, err := a.client()
-			if err != nil {
+			if targetErr != nil {
+				out.Error = targetErr.Error()
+			} else if c, _, err := a.client(cmd.Context()); err != nil {
 				out.Error = err.Error()
 			} else {
 				if pong, err := c.Ping(cmd.Context()); err != nil {
@@ -44,7 +48,11 @@ func (a *App) statusCmd() *cobra.Command {
 				} else {
 					out.HerdrVersion = pong.Version
 					out.Protocol = pong.Protocol
+					if pong.Backend != "" {
+						out.Backend = pong.Backend
+					}
 				}
+				selfID := a.selfTarget(out.Backend)
 				if agents, err := c.ListAgents(cmd.Context()); err != nil {
 					if out.Error == "" {
 						out.Error = err.Error()
@@ -57,7 +65,7 @@ func (a *App) statusCmd() *cobra.Command {
 							Name:    ag.Label(),
 							Agent:   ag.Agent,
 							Status:  ag.Status,
-							Ignored: a.isIgnored(ag, nil),
+							Ignored: isIgnoredTarget(selfID, ag, nil),
 						})
 					}
 				}
@@ -71,6 +79,7 @@ func (a *App) statusCmd() *cobra.Command {
 }
 
 type statusJSON struct {
+	Backend      string         `json:"backend,omitempty"`
 	Socket       string         `json:"socket"`
 	Session      string         `json:"session"`
 	Queue        string         `json:"queue"`
@@ -92,6 +101,9 @@ type agentStatus struct {
 }
 
 func printStatus(w interface{ Write([]byte) (int, error) }, s statusJSON) {
+	if s.Backend != "" {
+		fmt.Fprintf(w, "backend: %s\n", s.Backend)
+	}
 	fmt.Fprintf(w, "socket:  %s\n", s.Socket)
 	fmt.Fprintf(w, "session: %s\n", s.Session)
 	fmt.Fprintf(w, "queue:   %s\n", s.Queue)
@@ -127,12 +139,12 @@ func formatCounts(m map[string]int) string {
 	return strings.Join(parts, " ")
 }
 
-func (a *App) isIgnored(ag herdrx.Agent, extra []string) bool {
-	if a.selfPane != "" && ag.PaneID == a.selfPane {
+func isIgnoredTarget(selfID string, ag herdrx.Agent, extra []string) bool {
+	if selfID != "" && (ag.PaneID == selfID || ag.TerminalID == selfID) {
 		return true
 	}
 	for _, t := range extra {
-		if ag.PaneID == t || ag.Name == t || ag.Agent == t {
+		if ag.PaneID == t || ag.TerminalID == t || ag.Name == t || ag.Agent == t {
 			return true
 		}
 	}

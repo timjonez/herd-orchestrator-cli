@@ -19,6 +19,11 @@ func TestClassify(t *testing.T) {
 			kind: KindNeedsDecision,
 		},
 		{
+			name: "error is a decision",
+			in:   Input{Status: "error", Excerpt: "API rate limit exceeded"},
+			kind: KindNeedsDecision,
+		},
+		{
 			name: "approval question as idle",
 			in: Input{
 				Status:     "idle",

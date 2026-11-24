@@ -118,7 +118,7 @@ func (c *Conn) Ping(ctx context.Context) (Pong, error) {
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return Pong{}, err
 	}
-	return Pong{Version: out.Version, Protocol: out.Protocol}, nil
+	return Pong{Version: out.Version, Protocol: out.Protocol, Backend: BackendTUI}, nil
 }
 
 func (c *Conn) ListAgents(ctx context.Context) ([]Agent, error) {

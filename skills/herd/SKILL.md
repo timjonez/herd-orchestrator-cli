@@ -51,4 +51,4 @@ Do not ack an item you did not actually resolve.
 
 ## Connection
 
-`herd` uses the same socket resolution as Herdr (`HERDR_SOCKET_PATH`, `HERDR_SESSION`, `--session`, `--socket`). Queue files live under `$XDG_DATA_HOME/herd/<session>/` unless `HERD_STATE_DIR` / `--state-dir` is set.
+`herd` works with both `herdr-core` (`HC_TERMINAL_SOCKET`, `HC_TERMINAL_ID`, `$XDG_RUNTIME_DIR/herdr-core/default.sock`) and Herdr TUI (`HERDR_SOCKET_PATH`, `HERDR_SESSION`, `HERDR_PANE_ID`, `--session`). Pass `--backend auto|tui|core` (or `HERD_BACKEND`) or `--socket` to override auto-detection. Queue files live under `$XDG_DATA_HOME/herd/<session>/` unless `HERD_STATE_DIR` / `--state-dir` is set.
